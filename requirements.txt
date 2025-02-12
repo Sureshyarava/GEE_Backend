@@ -1,0 +1,6 @@
+Flask
+flask-cors
+earthengine-api
+firebase-admin
+python-dotenv
+gunicorn
