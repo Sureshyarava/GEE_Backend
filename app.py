@@ -6,8 +6,12 @@ import threading
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
+from secret_handler import load_secrets
 
-load_dotenv()
+load_secrets()
+
+if not os.environ.get('GAE_ENV', '').startswith('standard'):
+    load_dotenv()
 
 GEE_SERVICE_ACCOUNT_JSON = os.getenv('GEE_SERVICE_ACCOUNT_JSON')
 GEE_SERVICE_ACCOUNT = os.getenv('GEE_SERVICE_ACCOUNT')
@@ -22,7 +26,10 @@ LABELS = os.getenv('LABELS')
 
 app = Flask(__name__)
 CORS(app, resources={
-    r"/api/*": {"origins": CORS_ORIGINS}
+    r"/api/*": {"origins": CORS_ORIGINS,
+                "method": ["GET", "POST"],
+                "allow_headers": ["Content-Type", "Authorization"],
+                "supports_credentials": True}
 })
 
 cred = credentials.Certificate(os.getenv('FIREBASE_CREDENTIALS'))
@@ -33,7 +40,7 @@ db = firestore.client()
 def authenticate_ee():
     try:
         service_account = GEE_SERVICE_ACCOUNT
-        credentials = ee.ServiceAccountCredentials(service_account, GEE_SERVICE_ACCOUNT_JSON )
+        credentials = ee.ServiceAccountCredentials(service_account, GEE_SERVICE_ACCOUNT_JSON)
         ee.Initialize(credentials, project=GEE_PROJECT_ID)
     except:
         ee.Initialize(project=GEE_PROJECT_ID)
@@ -53,6 +60,19 @@ def load_ee_assets():
     collection = ee.ImageCollection(IMAGE_COLLECTION)
     crowns = ee.FeatureCollection(CROWNS)
     labels = ee.FeatureCollection(LABELS)
+
+
+@app.after_request
+def add_cors_headers(response):
+    allowed_origins = os.getenv('CORS_ORIGINS', '').split(',')
+    origin = request.headers.get('Origin', '')
+
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
 
 
 @app.route('/image', methods=['GET'])
@@ -139,8 +159,18 @@ def get_existing_global_ids(date):
     return results
 
 
-@app.route('/observations', methods=['POST'])
+def _build_preflight_response():
+    response = jsonify()
+    response.headers.add("Access-Control-Allow-Origin", ", ".join(os.getenv('CORS_ORIGINS', '').split(',')))
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+    return response
+
+
+@app.route('/observations', methods=['POST', 'OPTIONS'])
 def add_observation():
+    if request.method == 'OPTIONS':
+        return _build_preflight_response()
     try:
         data = request.json
         composite_id = f"{data['globalId']}_{data['date'].replace('_', '-')}"
